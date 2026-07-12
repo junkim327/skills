@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+.idea/
+.vscode/
+
+.env
+.env.*
+!.env.example
+.jira-ticket-workflow.json
+
+attachments.zip

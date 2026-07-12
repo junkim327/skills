@@ -1,0 +1,50 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install validation dependency
+        run: python -m pip install --disable-pip-version-check PyYAML
+
+      - name: Compile Python helper
+        run: python -m py_compile skills/jira-ticket-workflow/scripts/jira_workflow.py
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Validate skill metadata
+        env:
+          VALIDATOR_COMMIT: 49f948faa9258a0c61caceaf225e179651397431
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/openai/skills/${VALIDATOR_COMMIT}/skills/.system/skill-creator/scripts/quick_validate.py" \
+            --output "${RUNNER_TEMP}/quick_validate.py"
+          python "${RUNNER_TEMP}/quick_validate.py" skills/jira-ticket-workflow
+
+      - name: Verify skills CLI discovery
+        run: |
+          output="$(npx --yes skills@latest add . --list)"
+          printf '%s\n' "$output"
+          grep -q 'jira-ticket-workflow' <<< "$output"

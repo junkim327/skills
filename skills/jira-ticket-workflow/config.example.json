@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "jira": {
+    "base_url": "https://your-domain.atlassian.net",
+    "project_key": "ENG",
+    "issue_type": {
+      "name": "Task"
+    },
+    "component": null,
+    "default_priority": "Medium",
+    "assign_to_current_user": true,
+    "statuses": {
+      "ready": "To Do",
+      "in_progress": "In Progress",
+      "done": "Done"
+    },
+    "cc": {
+      "mode": "none",
+      "field_id": null,
+      "comment_text": "CC",
+      "account_ids": []
+    }
+  },
+  "ticket": {
+    "summary_templates": {
+      "fix": "[Agent fix] {agent}: {title}",
+      "new": "[New agent] {agent}: {title}"
+    },
+    "labels": [
+      "agent-development"
+    ],
+    "add_change_label": true,
+    "add_agent_label": true,
+    "extra_fields": {}
+  },
+  "git": {
+    "fix_branch": "fix/{ticket}-{agent}-{slug}",
+    "new_branch": "feat/{ticket}-{agent}",
+    "commit": "{ticket} {change_type}({agent}): {summary}",
+    "pull_request_title": "{ticket} {summary}"
+  },
+  "pull_request": {
+    "provider": "github",
+    "template_path": ".github/pull_request_template.md"
+  }
+}

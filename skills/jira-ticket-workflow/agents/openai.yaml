@@ -1,0 +1,4 @@
+interface:
+  display_name: "Jira Ticket Workflow"
+  short_description: "Deliver agent changes through Jira tickets"
+  default_prompt: "Use $jira-ticket-workflow to verify and deliver this agent change through Jira and a pull request, preferring Jira MCP with the REST helper as fallback."
