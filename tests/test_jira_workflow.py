@@ -580,6 +580,10 @@ class SetupCommandTest(unittest.TestCase):
                 "enabled PR-created and PR-merged automation rules",
                 result["jira_github_status_sync"],
             )
+            self.assertIn(
+                "Git branch, worktree, and pull-request conventions",
+                result["required_inputs"],
+            )
 
     def test_setup_writes_approved_config_atomically_and_refuses_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1096,6 +1100,33 @@ class CheckGitTest(unittest.TestCase):
 
 
 class DocumentationContractTest(unittest.TestCase):
+    def test_task_worktree_is_the_default_implementation_isolation(self) -> None:
+        skill = MODULE_PATH.parents[1].joinpath("SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        configuration = MODULE_PATH.parents[1].joinpath(
+            "references", "configuration.md"
+        ).read_text(encoding="utf-8")
+        normalized_skill = " ".join(skill.split())
+        normalized_configuration = " ".join(configuration.split())
+
+        self.assertIn(
+            "Default to a task-dedicated linked worktree",
+            normalized_skill,
+        )
+        self.assertIn(
+            "git worktree add -b <task-branch> <worktree-path> <approved-base-ref>",
+            normalized_configuration,
+        )
+        self.assertIn(
+            "Run all implementation commands with the task worktree",
+            normalized_configuration,
+        )
+        self.assertIn(
+            "obtain explicit approval before any forced removal",
+            normalized_configuration,
+        )
+
     def test_automated_sync_guide_covers_deferred_runtime_and_policy_boundary(self) -> None:
         guide = (
             MODULE_PATH.parents[1] / "references" / "github-integration.md"

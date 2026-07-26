@@ -1298,7 +1298,7 @@ def command_setup(args: argparse.Namespace) -> dict[str, Any]:
             "project key",
             "issue type",
             "ready, in-progress, in-review, and done statuses",
-            "Git branch and pull-request conventions",
+            "Git branch, worktree, and pull-request conventions",
             "Pull-request base branch",
             "Jira-GitHub status sync mode",
         ],
