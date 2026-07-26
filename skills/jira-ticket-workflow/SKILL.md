@@ -14,6 +14,8 @@ Read these resources when needed:
 - Before the first Jira write or when setup is unclear, read `references/configuration.md`.
 - Before setup or readiness verification when `pull_request.jira_status_sync` is
   `automated`, read `references/github-integration.md`.
+- Before creating an implementation branch or worktree, read **Git and worktree
+  isolation** in `references/configuration.md`.
 - Before drafting a Jira ticket or pull request, read `references/content-format.md`.
 
 ## Jira connection strategy
@@ -37,7 +39,11 @@ Prefer a Jira MCP connector exposed by the current host. Use the bundled Python 
   agent-initiated Jira write. Jira Automation rules approved during setup may
   perform their configured PR-driven transitions without per-event approval.
 - Create or select a Jira ticket before implementation.
-- Move the ticket to the configured in-progress status after creating the local branch or worktree and before the first edit.
+- Default to a task-dedicated linked worktree for implementation. Reuse the
+  current checkout only when it is already a clean linked worktree dedicated to
+  the same task.
+- Move the ticket to the configured in-progress status after preparing the task
+  worktree and branch and before the first edit.
 - When Jira status sync is automated, verify the GitHub for Atlassian connection,
   repository access, Jira-key linkage, enabled automation rules, workflow
   transitions, and Automation actor before implementation.
@@ -67,7 +73,9 @@ When the user asks to set up the workflow, or configuration is missing:
      ```
 
    Never ask the user to paste credentials into the conversation.
-4. Inspect repository branch, commit, and pull-request conventions. Ask one setup question at a time. Use the host's structured question tool when available; otherwise ask directly in chat and wait.
+4. Inspect repository branch, commit, worktree-location, and pull-request
+   conventions. Ask one setup question at a time. Use the host's structured
+   question tool when available; otherwise ask directly in chat and wait.
 5. Build the proposed configuration at a temporary path outside the repository. Preview it:
 
    ```text
@@ -225,7 +233,21 @@ After creation, inspect the current status and available transitions. Preview an
 
 ## 8. Start implementation behind the ticket
 
-Use the configured branch template and include the Jira key. Create an isolated branch or worktree. Immediately before the first edit, inspect available transitions. Preview the configured in-progress transition, obtain explicit approval, then execute it through MCP or REST fallback:
+Use the configured branch template and include the Jira key. Follow **Git and
+worktree isolation** in `references/configuration.md`:
+
+1. Compare the absolute Git directory and common directory to determine whether
+   the current checkout is already a linked worktree.
+2. Reuse it only when it is clean and dedicated to this task.
+3. When the current checkout is primary or safe reuse cannot be confirmed, leave
+   the primary checkout on its base branch and create the task branch and
+   worktree atomically with `git worktree add -b`.
+4. Run every edit, test, commit, push, and pull-request command from the task
+   worktree. Give each concurrent task or session its own branch and worktree.
+
+Immediately before the first edit, inspect available transitions. Preview the
+configured in-progress transition, obtain explicit approval, then execute it
+through MCP or REST fallback:
 
 ```text
 python3 "<skill-dir>/scripts/jira_workflow.py" --config .jira-ticket-workflow.json status <ISSUE-KEY>
@@ -278,6 +300,11 @@ panel and Jira reached in-review. If either check fails, inspect the rule audit
 log and report the failure; do not silently force the transition. Never approve
 or merge the pull request for the user. Treat repository review and merge
 policies as repository-owned concerns outside Jira status-sync readiness.
+
+Keep the task worktree through review. After the pull request is confirmed
+merged and the user requests cleanup, verify it is clean, remove the worktree
+from another checkout, then delete the merged local branch. Never force worktree
+or branch removal without explicit approval.
 
 For `manual` status sync, preview and approve the in-review transition after the
 pull request opens, and report the done transition required after the approved

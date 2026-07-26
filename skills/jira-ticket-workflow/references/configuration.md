@@ -9,7 +9,8 @@ Use the skill's guided setup instead of editing every field by hand:
 1. Run `setup` without `--write` to see the template and required decisions.
 2. Prefer a Jira MCP connector exposed by the host. Use the bundled REST adapter only as the fallback described below.
 3. Discover accessible Jira projects, issue types, and statuses with read-only MCP calls, or use `setup --base-url` and `--project-key` for REST fallback.
-4. Inspect the target repository's Git and pull-request conventions.
+4. Inspect the target repository's Git, worktree-location, and pull-request
+   conventions.
 5. Build the proposed configuration outside the repository and preview it with `setup --input`.
 6. Obtain explicit approval, then use `setup --input ... --write`.
 7. When `pull_request.jira_status_sync` is `automated`, read
@@ -165,6 +166,59 @@ Use `extra_fields` only for non-core Jira fields. The helper rejects attempts to
 ```
 
 Use the repository's existing conventions when they conflict with the example. Keep the Jira key in branches, commits, and pull-request titles when integrations rely on it.
+
+### Git and worktree isolation
+
+Default to one task branch in one linked worktree so concurrent sessions do not
+share a checkout. First inspect the current checkout:
+
+```bash
+git rev-parse --path-format=absolute --git-dir
+git rev-parse --path-format=absolute --git-common-dir
+git status --short --branch
+```
+
+Different Git and common directories mean the current checkout is a linked
+worktree. Reuse it only when it is clean, belongs to the current session, and is
+not being used for another task. If it is detached or on a non-task branch,
+create the configured task branch from the approved base ref inside that
+worktree. If ownership or task isolation cannot be confirmed, create a new
+dedicated worktree instead.
+
+```bash
+git switch -c <task-branch> <approved-base-ref>
+```
+
+When both directories are the same, keep the primary checkout on its base
+branch. Choose a unique worktree path outside the primary checkout, following
+the host or repository convention, then create the branch and worktree together:
+
+```bash
+git worktree add -b <task-branch> <worktree-path> <approved-base-ref>
+```
+
+Prefer the current remote-tracking base ref after refreshing it when network
+access and repository policy allow. Otherwise use the verified local
+`pull_request.base_branch`. Do not create the task branch in the primary
+checkout first. Git permits a branch to be checked out in only one worktree.
+
+Run all implementation commands with the task worktree as their working
+directory. Assign every concurrent task or independently editing session a
+different branch and worktree; do not point concurrent sessions at the same
+path.
+
+Keep the worktree while its pull request is open. After the pull request is
+confirmed merged and cleanup is requested:
+
+1. Verify that the task worktree has no uncommitted or unpushed work.
+2. Run `git worktree remove <worktree-path>` from the primary or another
+   checkout.
+3. Run `git branch -d <task-branch>`.
+4. Delete the remote branch only when it still exists and repository policy does
+   not already remove merged branches.
+
+If normal removal refuses after a squash or rebase merge, report why and obtain
+explicit approval before any forced removal.
 
 ## Pull-request configuration
 

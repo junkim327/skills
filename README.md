@@ -2,7 +2,7 @@
 
 [![skills.sh](https://skills.sh/b/junkim327/skills)](https://skills.sh/junkim327/skills)
 
-A Jira-backed workflow for maintaining repository-based AI agents. It separates running an agent from fixing or creating one, inspects the real codebase before planning, requires human approval before Jira writes, and carries the approved change through implementation, review, and handoff.
+A Jira-backed workflow for maintaining repository-based AI agents. It separates running an agent from fixing or creating one, inspects the real codebase before planning, requires human approval before Jira writes, isolates each implementation in a task worktree, and carries the approved change through review and handoff.
 
 ## Install
 
@@ -109,7 +109,7 @@ classify request
   → search Jira for duplicates
   → show ticket draft and obtain approval
   → create/select ticket
-  → start local work and move to In Progress
+  → create or reuse a task-dedicated worktree and move to In Progress
   → implement and validate
   → explain the change in plain language
   → open PR; Jira Automation moves the ticket to In Review
