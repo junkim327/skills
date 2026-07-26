@@ -35,7 +35,6 @@ AUTOMATED_STATUS_SYNC_CHECKS = (
     "jira_github_connection",
     "jira_automation_rules",
     "jira_workflow_automation",
-    "github_merge_controls",
 )
 VALID_EXTERNAL_CHECKS = {"jira_mcp", *AUTOMATED_STATUS_SYNC_CHECKS}
 CONFIG_VERSION = 2
@@ -1306,7 +1305,7 @@ def command_setup(args: argparse.Namespace) -> dict[str, Any]:
         "jira_github_status_sync": (
             "automated mode requires GitHub for Atlassian, repository access, "
             "enabled PR-created and PR-merged automation rules, valid workflow "
-            "transitions, Automation actor permissions, and protected human-approved merge"
+            "transitions, and Automation actor permissions"
         ),
     }
     if not args.write:
@@ -1952,10 +1951,6 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
             "jira_workflow_automation": (
                 "required workflow paths and Automation actor permissions",
                 "Verify every configured transition path and the actor's Transition issues permission.",
-            ),
-            "github_merge_controls": (
-                "protected human-approved merge controls on the configured base branch",
-                "Verify the active ruleset or branch protection, approvals, bypass actors, and auto-merge policy.",
             ),
         }
         for check_id in AUTOMATED_STATUS_SYNC_CHECKS:

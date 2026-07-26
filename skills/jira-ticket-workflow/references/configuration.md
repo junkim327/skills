@@ -14,8 +14,7 @@ Use the skill's guided setup instead of editing every field by hand:
 6. Obtain explicit approval, then use `setup --input ... --write`.
 7. When `pull_request.jira_status_sync` is `automated`, read
    `github-integration.md` and verify the Jira–GitHub app, repository,
-   Jira-key linkage, Automation rules, workflow transitions, actor, and GitHub
-   merge controls.
+   Jira-key linkage, Automation rules, workflow transitions, and actor.
 8. Complete the connection-specific Jira checks, then run either
    `check --repo . --jira-connection mcp` or
    `check --repo . --jira-connection rest`, and resolve every blocker.
@@ -184,20 +183,17 @@ If the target repository already has a pull-request template, use it. Otherwise 
 
 Set `provider` to `github` for automatic checks and PR creation through an authenticated `gh` CLI. Set it to `manual` when another tool or a human will open the pull request.
 
-Set `base_branch` to the branch that receives the pull request and whose ruleset
-or branch protection is verified. The readiness check confirms that this branch
-exists. The skill opens the pull request against this branch and verifies the
-created pull request's actual base. A pull request targeting another branch
-requires that branch's existence and merge controls to be inspected before
-handoff.
+Set `base_branch` to the branch that receives the pull request. The readiness
+check confirms that this branch exists. The skill opens the pull request against
+this branch and verifies the created pull request's actual base. Resolve a
+different target branch before handoff.
 
 Set `jira_status_sync` to:
 
 - `automated`: require GitHub for Atlassian, target repository access,
   Jira-key linkage, enabled PR-created and PR-merged Automation rules, workflow
-  transitions, Automation actor permissions, and protected human-approved
-  merge. Any missing, misconfigured, or unverified structural item blocks
-  readiness.
+  transitions, and Automation actor permissions. Any missing, misconfigured, or
+  unverified structural item blocks readiness.
 - `manual`: do not require native status synchronization. The skill previews an
   in-review transition after PR creation and reports the required done transition
   after merge.
@@ -206,10 +202,10 @@ Set `jira_status_sync` to:
 best-effort mode: the workflow either verifies automatic synchronization or
 explicitly declares manual ownership.
 
-The helper cannot inspect every Marketplace app, Automation, workflow, and
-ruleset setting with Jira Platform REST credentials. It therefore returns four
-required external checks. Follow `github-integration.md`; only after each
-structural item passes, rerun:
+The helper cannot inspect every Marketplace app, Automation, and workflow
+setting with Jira Platform REST credentials. It therefore returns three required
+external checks. Follow `github-integration.md`; only after each structural item
+passes, rerun:
 
 ```text
 python3 "<skill-dir>/scripts/jira_workflow.py" \
@@ -217,8 +213,7 @@ python3 "<skill-dir>/scripts/jira_workflow.py" \
   check --repo . --jira-connection <mcp-or-rest> \
   --verified-external-check jira_github_connection \
   --verified-external-check jira_automation_rules \
-  --verified-external-check jira_workflow_automation \
-  --verified-external-check github_merge_controls
+  --verified-external-check jira_workflow_automation
 ```
 
 ## Security boundaries
