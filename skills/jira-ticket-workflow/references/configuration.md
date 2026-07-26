@@ -14,13 +14,14 @@ Use the skill's guided setup instead of editing every field by hand:
 5. Build the proposed configuration outside the repository and preview it with `setup --input`.
 6. Obtain explicit approval, then use `setup --input ... --write`.
 7. When `pull_request.jira_status_sync` is `automated`, read
-   `github-integration.md` and verify the Jira–GitHub app, repository,
-   Jira-key linkage, Automation rules, workflow transitions, and actor.
+   `github-integration.md` for the intended lifecycle and failure guide. Do not
+   require proof of app, Automation, workflow, or actor internals before work.
 8. Complete the connection-specific Jira checks, then run either
    `check --repo . --jira-connection mcp` or
-   `check --repo . --jira-connection rest`, and resolve every blocker.
+   `check --repo . --jira-connection rest`. Resolve core blockers and record
+   operation-specific or status-sync checks as deferred.
 
-`setup` refuses to overwrite an existing configuration unless `--force` is explicit. It writes atomically and never stores credentials. `check` performs read-only REST Jira checks when selected and always checks local Git/GitHub readiness. In MCP mode, the host must complete Jira checks before treating the combined result as ready.
+`setup` refuses to overwrite an existing configuration unless `--force` is explicit. It writes atomically and never stores credentials. `check` performs minimal read-only Jira checks when REST is selected and always checks local Git/GitHub readiness. In MCP mode, the host must verify Jira identity, configured project access, and search before treating core access as ready.
 
 ## Jira connection priority
 
@@ -29,14 +30,16 @@ Use the skill's guided setup instead of editing every field by hand:
 3. Do not switch to REST to bypass an MCP authentication, permission, policy, or data failure.
 4. Keep the selected connection for the entire workflow and disclose it in approval previews.
 
-The helper cannot call host MCP tools. After the host verifies Jira through MCP, use this command for configuration and Git/GitHub checks:
+The helper cannot call host MCP tools. After the host verifies Jira identity,
+configured project access, and search through MCP, use this command for
+configuration and Git/GitHub checks:
 
 ```bash
 python3 "<skill-dir>/scripts/jira_workflow.py" \
   --config .jira-ticket-workflow.json check --repo . --jira-connection mcp
 ```
 
-Until the host verifies Jira, the result uses
+Until the host verifies core Jira access, the result uses
 `mode: "external-verification-required"`, returns `ready: false`, and includes
 `external_checks_required: ["jira_mcp"]`. After the host completes the MCP checks,
 rerun with `--verified-external-check jira_mcp`. Never pass that option without
@@ -118,7 +121,10 @@ version 1 configurations must be re-previewed and approved through setup.
 - `field`: populate a Jira multi-user custom field. Set `field_id`, for example `customfield_12345`.
 - `comment`: add an ADF comment mentioning each configured account ID after ticket creation.
 
-`field` and `comment` modes require at least one account ID. The readiness check verifies that configured accounts are active; for `field` mode, it also verifies that the field is a multi-user field available on the selected issue type's create screen.
+`field` and `comment` modes require at least one account ID. Validate account
+availability and field compatibility when the first create operation uses them.
+If Jira rejects the operation, identify the exact field or account and guide the
+user through setup correction.
 
 Comment mode is a two-step operation: the issue is created before the mention comment is added. If the comment fails, inspect the returned issue and add CC manually; do not rerun ticket creation.
 
@@ -244,31 +250,29 @@ different target branch before handoff.
 
 Set `jira_status_sync` to:
 
-- `automated`: require GitHub for Atlassian, target repository access,
-  Jira-key linkage, enabled PR-created and PR-merged Automation rules, workflow
-  transitions, and Automation actor permissions. Any missing, misconfigured, or
-  unverified structural item blocks readiness.
+- `automated`: expect GitHub for Atlassian and Jira Automation to move linked
+  tickets after PR-created and PR-merged events. Keep the Jira key in the branch
+  and PR title, but defer app, rule, workflow, and actor verification until an
+  event fails.
 - `manual`: do not require native status synchronization. The skill previews an
   in-review transition after PR creation and reports the required done transition
   after merge.
 
-`automated` is the example and recommended mode. There is no optional
-best-effort mode: the workflow either verifies automatic synchronization or
-explicitly declares manual ownership.
+`automated` is the example and recommended mode. A passing minimal check may
+return `mode: "ready-with-deferred-checks"` and list
+`jira_operation_configuration`, `jira_pr_created_status_sync`, and
+`jira_pr_merged_status_sync` in `deferred_checks`. These are follow-up points,
+not implementation blockers. `jira_operation_configuration` is a per-run
+reminder rather than an attestation: each successful create, comment, or
+transition validates only that operation's dependencies. The two event checks
+are also per-run reminders; record successful PR-created and PR-merged outcomes
+in the normal handoff context rather than trying to clear them in the helper.
 
-The helper cannot inspect every Marketplace app, Automation, and workflow
-setting with Jira Platform REST credentials. It therefore returns three required
-external checks. Follow `github-integration.md`; only after each structural item
-passes, rerun:
-
-```text
-python3 "<skill-dir>/scripts/jira_workflow.py" \
-  --config .jira-ticket-workflow.json \
-  check --repo . --jira-connection <mcp-or-rest> \
-  --verified-external-check jira_github_connection \
-  --verified-external-check jira_automation_rules \
-  --verified-external-check jira_workflow_automation
-```
+After opening a real pull request, verify its Development-panel linkage and the
+in-review status. After a reported merge, verify done. Diagnose only the event
+that failed, then offer a one-time manual transition through the normal approval
+flow when useful. If the team intentionally owns every transition manually,
+change the configuration to `manual` through setup preview and approval.
 
 ## Security boundaries
 

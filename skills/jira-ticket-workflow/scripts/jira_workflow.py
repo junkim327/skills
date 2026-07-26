@@ -31,12 +31,11 @@ VALID_CC_MODES = {"none", "field", "comment"}
 VALID_PR_PROVIDERS = {"github", "manual"}
 VALID_JIRA_STATUS_SYNC_MODES = {"automated", "manual"}
 VALID_JIRA_CONNECTIONS = {"mcp", "rest"}
-AUTOMATED_STATUS_SYNC_CHECKS = (
-    "jira_github_connection",
-    "jira_automation_rules",
-    "jira_workflow_automation",
+AUTOMATED_STATUS_SYNC_EVENT_CHECKS = (
+    "jira_pr_created_status_sync",
+    "jira_pr_merged_status_sync",
 )
-VALID_EXTERNAL_CHECKS = {"jira_mcp", *AUTOMATED_STATUS_SYNC_CHECKS}
+VALID_EXTERNAL_CHECKS = {"jira_mcp"}
 CONFIG_VERSION = 2
 DEFAULT_CONFIG_NAME = ".jira-ticket-workflow.json"
 ISSUE_KEY_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)-([1-9][0-9]*)$")
@@ -1303,9 +1302,9 @@ def command_setup(args: argparse.Namespace) -> dict[str, Any]:
             "Jira-GitHub status sync mode",
         ],
         "jira_github_status_sync": (
-            "automated mode requires GitHub for Atlassian, repository access, "
-            "enabled PR-created and PR-merged automation rules, valid workflow "
-            "transitions, and Automation actor permissions"
+            "automated mode expects GitHub for Atlassian and Jira Automation, "
+            "but validates status synchronization after real pull-request and "
+            "merge events instead of blocking implementation during setup"
         ),
     }
     if not args.write:
@@ -1582,6 +1581,7 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
             + ", ".join(sorted(VALID_EXTERNAL_CHECKS))
         )
     external_checks_required: list[str] = []
+    deferred_checks: list[str] = []
 
     checks.append(
         _check(
@@ -1637,7 +1637,7 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
                 _check(
                     "jira_mcp",
                     "pass",
-                    "The host reports that required Jira MCP checks passed",
+                    "The host reports that core Jira MCP access checks passed",
                     required=True,
                 )
             )
@@ -1649,8 +1649,8 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
                     "Jira connectivity is delegated to the host MCP and remains unverified",
                     required=True,
                     remediation=(
-                        "Verify Jira identity, project access, search, issue types, "
-                        "statuses, and write permissions with the host MCP, then rerun "
+                        "Verify Jira identity, configured project access, and search "
+                        "with the host MCP, then rerun "
                         "check with --verified-external-check jira_mcp."
                     ),
                 )
@@ -1722,185 +1722,6 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 )
 
-                issue_types = client.issue_types(project_key)
-                configured_type = config["jira"]["issue_type"]
-                matched_issue_type = next(
-                    (
-                        item
-                        for item in issue_types
-                        if (
-                            configured_type.get("id")
-                            and str(item.get("id")) == str(configured_type.get("id"))
-                        )
-                        or (
-                            configured_type.get("name")
-                            and str(item.get("name") or "").casefold()
-                            == str(configured_type.get("name")).casefold()
-                        )
-                    ),
-                    None,
-                )
-                type_match = matched_issue_type is not None
-                checks.append(
-                    _check(
-                        "jira_issue_type",
-                        "pass" if type_match else "block",
-                        "Configured issue type is available" if type_match else "Configured issue type is not available",
-                        required=True,
-                        remediation=None if type_match else "Run setup discovery and select an available issue type.",
-                    )
-                )
-
-                available_statuses = {
-                    str(status.get("name") or "").casefold()
-                    for group in client.project_statuses(project_key)
-                    for status in group.get("statuses", [])
-                }
-                missing_statuses = [
-                    name
-                    for name in config["jira"]["statuses"].values()
-                    if str(name).casefold() not in available_statuses
-                ]
-                checks.append(
-                    _check(
-                        "jira_statuses",
-                        "pass" if not missing_statuses else "block",
-                        "Configured Jira statuses exist"
-                        if not missing_statuses
-                        else "Configured Jira statuses are missing: " + ", ".join(missing_statuses),
-                        required=True,
-                        remediation=None if not missing_statuses else "Run setup discovery and select valid status names.",
-                    )
-                )
-
-                permission_keys = [
-                    "BROWSE_PROJECTS",
-                    "CREATE_ISSUES",
-                    "TRANSITION_ISSUES",
-                    "ADD_COMMENTS",
-                ]
-                if config["jira"].get("assign_to_current_user", True):
-                    permission_keys.append("ASSIGN_ISSUES")
-                permissions = client.permissions(project_key, permission_keys)
-                missing_permissions = [
-                    key
-                    for key in permission_keys
-                    if not bool((permissions.get(key) or {}).get("havePermission"))
-                ]
-                checks.append(
-                    _check(
-                        "jira_permissions",
-                        "pass" if not missing_permissions else "block",
-                        "Required Jira permissions are available"
-                        if not missing_permissions
-                        else "Missing Jira permissions: " + ", ".join(missing_permissions),
-                        required=True,
-                        remediation=None if not missing_permissions else "Ask a Jira administrator for the listed project permissions.",
-                    )
-                )
-
-                component = config["jira"].get("component")
-                if component:
-                    components = client.components(project_key)
-                    component_found = any(
-                        str(item.get("name") or "").casefold() == str(component).casefold()
-                        for item in components
-                    )
-                    checks.append(
-                        _check(
-                            "jira_component",
-                            "pass" if component_found else "block",
-                            "Configured component exists" if component_found else "Configured component does not exist",
-                            required=True,
-                            remediation=None if component_found else "Choose an existing component or remove it from config.",
-                        )
-                    )
-
-                priority = config["jira"].get("default_priority")
-                if priority:
-                    priorities = client.priorities()
-                    priority_found = any(
-                        str(item.get("name") or "").casefold() == str(priority).casefold()
-                        for item in priorities
-                    )
-                    checks.append(
-                        _check(
-                            "jira_priority",
-                            "pass" if priority_found else "block",
-                            "Configured priority exists" if priority_found else "Configured priority does not exist",
-                            required=True,
-                            remediation=None if priority_found else "Choose an available priority or remove the default.",
-                        )
-                    )
-
-                cc = config["jira"].get("cc") or {}
-                if cc.get("mode") == "field":
-                    fields = client.fields()
-                    configured_field = next(
-                        (
-                            item
-                            for item in fields
-                            if str(item.get("id")) == str(cc.get("field_id"))
-                        ),
-                        None,
-                    )
-                    schema = (configured_field or {}).get("schema") or {}
-                    multi_user = (
-                        schema.get("type") == "array" and schema.get("items") == "user"
-                    ) or str(schema.get("custom") or "").endswith(":multiuserpicker")
-                    createable = False
-                    if matched_issue_type and matched_issue_type.get("id"):
-                        create_fields = client.create_fields(
-                            project_key, str(matched_issue_type["id"])
-                        )
-                        createable = any(
-                            str(item.get("fieldId") or item.get("key"))
-                            == str(cc.get("field_id"))
-                            and "set" in (item.get("operations") or [])
-                            for item in create_fields
-                        )
-                    field_found = bool(configured_field and multi_user and createable)
-                    checks.append(
-                        _check(
-                            "jira_cc_field",
-                            "pass" if field_found else "block",
-                            "Configured CC field is a createable multi-user field"
-                            if field_found
-                            else "Configured CC field is not a createable multi-user field for this issue type",
-                            required=True,
-                            remediation=None
-                            if field_found
-                            else "Choose a multi-user field on the issue create screen, or use comment/none mode.",
-                        )
-                    )
-
-                if cc.get("mode") in {"field", "comment"}:
-                    configured_accounts = _unique_strings(cc.get("account_ids", []))
-                    resolved_users = client.users(configured_accounts)
-                    active_accounts = {
-                        str(user.get("accountId"))
-                        for user in resolved_users
-                        if user.get("active", True) is not False
-                    }
-                    unresolved = [
-                        account_id
-                        for account_id in configured_accounts
-                        if account_id not in active_accounts
-                    ]
-                    checks.append(
-                        _check(
-                            "jira_cc_accounts",
-                            "pass" if not unresolved else "block",
-                            "Configured CC accounts are active and accessible"
-                            if not unresolved
-                            else f"{len(unresolved)} configured CC account(s) could not be resolved as active",
-                            required=True,
-                            remediation=None
-                            if not unresolved
-                            else "Replace inactive or inaccessible CC account IDs through setup.",
-                        )
-                    )
-
                 project = _jql_quote(project_key)
                 client.search(
                     f'project = "{project}" ORDER BY updated DESC',
@@ -1908,18 +1729,6 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
                     limit=1,
                 )
                 checks.append(_check("jira_search", "pass", "Jira search access works", required=True))
-                checks.append(
-                    _check(
-                        "jira_transition_paths",
-                        "warn",
-                        (
-                            "Status names exist; exact transition paths are verified "
-                            "externally for automated sync and against each real issue "
-                            "for manual transitions"
-                        ),
-                        required=False,
-                    )
-                )
             except JiraError as exc:
                 check_id, message = _jira_failure_message(exc)
                 checks.append(
@@ -1932,6 +1741,24 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
                     )
                 )
 
+    if config:
+        checks.append(
+            _check(
+                "jira_operation_configuration",
+                "warn",
+                (
+                    "Issue type, statuses, fields, accounts, and operation-specific "
+                    "write permissions are validated when first used"
+                ),
+                required=False,
+                remediation=(
+                    "If a Jira create, comment, or transition fails, inspect that "
+                    "operation and guide the user through the specific correction."
+                ),
+            )
+        )
+        deferred_checks.append("jira_operation_configuration")
+
     checks.extend(_check_git(config, repo=Path(args.repo).expanduser().resolve()))
     status_sync = (
         ((config or {}).get("pull_request") or {}).get(
@@ -1939,42 +1766,35 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
         )
     )
     if config and status_sync == "automated":
-        external_check_details = {
-            "jira_github_connection": (
-                "GitHub for Atlassian, organization, and repository access",
-                "Verify the app connection and repository access in references/github-integration.md.",
+        event_check_details = {
+            "jira_pr_created_status_sync": (
+                "PR-created Development linkage and in-review transition",
+                (
+                    "After opening the first real PR, verify Development linkage "
+                    "and in-review; diagnose only that event if either fails."
+                ),
             ),
-            "jira_automation_rules": (
-                "enabled PR-created and PR-merged Jira Automation rules",
-                "Verify each rule's trigger, scope, conditions, action, and enabled state.",
-            ),
-            "jira_workflow_automation": (
-                "required workflow paths and Automation actor permissions",
-                "Verify every configured transition path and the actor's Transition issues permission.",
+            "jira_pr_merged_status_sync": (
+                "PR-merged done transition",
+                (
+                    "After the user reports a merge, verify done; inspect the "
+                    "merged rule, workflow transition, actor permission, and audit "
+                    "log only if it fails."
+                ),
             ),
         }
-        for check_id in AUTOMATED_STATUS_SYNC_CHECKS:
-            label, remediation = external_check_details[check_id]
-            if check_id in verified_external_checks:
-                checks.append(
-                    _check(
-                        check_id,
-                        "pass",
-                        f"The host reports that {label} passed",
-                        required=True,
-                    )
+        for check_id in AUTOMATED_STATUS_SYNC_EVENT_CHECKS:
+            label, remediation = event_check_details[check_id]
+            checks.append(
+                _check(
+                    check_id,
+                    "warn",
+                    f"Verification of {label} is deferred until the real event",
+                    required=False,
+                    remediation=remediation,
                 )
-            else:
-                checks.append(
-                    _check(
-                        check_id,
-                        "unverified",
-                        f"Automated status sync requires host verification of {label}",
-                        required=True,
-                        remediation=remediation,
-                    )
-                )
-                external_checks_required.append(check_id)
+            )
+            deferred_checks.append(check_id)
     elif config:
         checks.append(
             _check(
@@ -1990,6 +1810,8 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
         mode = "blocked"
     elif external_checks_required:
         mode = "external-verification-required"
+    elif deferred_checks:
+        mode = "ready-with-deferred-checks"
     else:
         mode = "standard"
     return {
@@ -1997,6 +1819,7 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
         "mode": mode,
         "jira_connection": jira_connection,
         "external_checks_required": external_checks_required,
+        "deferred_checks": deferred_checks,
         "writes_performed": False,
         "checks": checks,
     }
@@ -2039,8 +1862,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(VALID_EXTERNAL_CHECKS),
         default=[],
         help=(
-            "record a required check already verified by the host; repeat for "
-            "multiple checks and never use without evidence"
+            "record core Jira MCP access already verified by the host; never use "
+            "without evidence"
         ),
     )
     check.set_defaults(handler=command_check)

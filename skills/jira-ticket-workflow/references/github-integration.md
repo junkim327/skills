@@ -1,13 +1,15 @@
 # Jira–GitHub status synchronization
 
-Use this guide when `pull_request.jira_status_sync` is `automated`. Automated
-status sync is a required setup contract, not a best-effort enhancement.
+Use this guide when `pull_request.jira_status_sync` is `automated` and the user
+asks for setup help or an observed PR-driven transition fails. Do not require
+advance proof of every integration detail before implementation.
 
 ## Contents
 
 - [Required outcome](#required-outcome)
-- [Preflight result states](#preflight-result-states)
-- [Read-only preflight](#read-only-preflight)
+- [Minimal preflight](#minimal-preflight)
+- [Event-time verification](#event-time-verification)
+- [Failure diagnosis](#failure-diagnosis)
 - [Setup guide](#setup-guide)
 - [Guided remediation](#guided-remediation)
 - [Authoritative references](#authoritative-references)
@@ -28,89 +30,92 @@ To Do → In Progress → In Review → Done
 - The integration observes pull-request events. Repository review and merge
   policies are owned separately and are not status-sync readiness requirements.
 
-## Preflight result states
+## Minimal preflight
 
-Classify each required check explicitly:
+Before implementation, verify only what is needed to work safely:
 
-- `pass`: evidence confirms the configured behavior.
-- `missing`: the app, connection, repository, rule, status, or transition is absent.
-- `misconfigured`: the object exists but points to the wrong scope, status, or actor.
-- `unverified`: current credentials or tools cannot inspect it.
+- Jira identity, configured project access, and search;
+- preservation of existing Git changes and the configured base branch;
+- GitHub authentication and target repository access when GitHub opens the PR;
+- an uppercase Jira key in the branch and pull-request title templates.
 
-For automated mode, every required structural result other than `pass` blocks
-implementation. Never turn `unverified` into `missing`, and never accept a
-configuration field or a user-authored boolean as proof. An end-to-end event
-test may be deferred until the first real pull request when no safe existing
-example exists.
+A dirty primary checkout is not automatically a blocker when a clean task
+worktree can be created without altering it. Never stash, reset, clean, or
+overwrite existing work merely to make readiness pass.
 
-## Read-only preflight
+Do not block implementation because the host cannot inspect the Marketplace app,
+repository selection, Automation rules, workflow paths, Development panel, or
+Automation actor. Do not open administrator settings solely to make readiness
+pass. If reliable read-only evidence is already available, record it; otherwise
+leave these checks in `deferred_checks`.
 
-Prefer an authoritative connector or API. Use an authenticated browser session
-when app-management or Automation details are not exposed by the connector. Do
-not install apps, connect organizations, edit repository access, or create rules
-without the user's explicit approval.
+For MCP, attest only the core Jira access check when rerunning the helper:
 
-Verify all of the following:
-
-1. **Target repository**
-   - Resolve the GitHub owner and repository from `origin`.
-   - Confirm the active GitHub account can read the repository and has the access
-     needed for the planned branch and pull request.
-2. **GitHub for Atlassian**
-   - In Jira, open **Apps → Manage your apps → GitHub for Atlassian**.
-   - Confirm the app is installed and the target GitHub organization is listed as
-     connected.
-   - Confirm the target repository is included when the installation uses
-     selected-repository access.
-3. **Jira-key linkage**
-   - Confirm the branch and pull-request title templates contain `{ticket}` and
-     produce an uppercase Jira key.
-   - When a safe existing example exists, confirm its pull request appears in the
-     ticket's Development panel.
-   - When no example exists, record the Development-panel test as deferred rather
-     than unverified. Verify it immediately after the first real pull request and
-     block handoff if the pull request does not appear or the ticket does not
-     reach in-review.
-4. **Automation rules**
-   - Inspect Automation through its read-only API or Jira UI.
-   - Confirm an enabled `Pull request created` rule transitions the linked ticket
-     from the configured in-progress status to the configured in-review status.
-   - Confirm an enabled `Pull request merged` rule transitions the linked ticket
-     from the configured in-review status to the configured done status.
-   - If configured, confirm `Pull request declined` returns the ticket to
-     in-progress.
-   - Check rule scope, project, conditions, destination status, and actor. A
-     matching rule name alone is not evidence.
-5. **Workflow and permissions**
-   - Confirm the issue type's workflow contains these exact paths:
-     - configured ready → configured in-progress;
-     - configured in-progress → configured in-review;
-     - configured in-review → configured done;
-     - configured in-review → configured in-progress when the declined rule is enabled.
-   - Confirm the Automation actor has permission to transition tickets in the
-     configured project.
-   - Confirm users who need to inspect linked pull requests have View Development
-     Tools permission.
-After every required structural item passes and any first-event test is
-explicitly recorded as deferred, rerun the helper with:
-
-```text
+```bash
 python3 "<skill-dir>/scripts/jira_workflow.py" \
   --config .jira-ticket-workflow.json \
-  check --repo . --jira-connection <mcp-or-rest> \
-  --verified-external-check jira_github_connection \
-  --verified-external-check jira_automation_rules \
-  --verified-external-check jira_workflow_automation
+  check --repo . --jira-connection mcp \
+  --verified-external-check jira_mcp
 ```
 
-When Jira was verified through MCP, also add:
+There are no status-sync attestation flags. The helper reports the created and
+merged checks as per-run event-time reminders rather than preflight
+requirements. Record successful event verification in the handoff context; the
+helper does not maintain durable integration state.
 
-```text
---verified-external-check jira_mcp
-```
+## Event-time verification
 
-The flags record checks already completed by the host for that invocation. They
-must not be passed speculatively or saved in repository configuration.
+### After pull-request creation
+
+1. Confirm the actual base branch matches `pull_request.base_branch`.
+2. Confirm the branch or PR title includes the uppercase Jira key.
+3. Inspect the linked ticket:
+   - if the PR appears in Development and the ticket reaches in-review, continue;
+   - if either result is missing, keep the PR open and diagnose that event.
+4. Report the observed failure and the next corrective step. Do not silently
+   force a transition.
+5. When useful, offer a one-time manual in-review transition through the normal
+   preview and approval flow.
+
+The missing automatic transition does not invalidate completed code or require
+closing the PR. Keep the integration problem visible in the handoff.
+
+### After merge
+
+When the user reports a merge or asks for cleanup, confirm the linked ticket
+reaches done. If it does not, diagnose the merged-event path and offer a one-time
+manual done transition through the normal approval flow. Repeated failures
+should lead to fixing Automation or explicitly changing
+`jira_status_sync` to `manual`.
+
+## Failure diagnosis
+
+Inspect only the path associated with the failed event:
+
+1. **PR absent from Development**
+   - Check the uppercase Jira key in the branch and PR title.
+   - Check whether GitHub for Atlassian is installed and the organization is
+     connected.
+   - Check whether selected-repository access includes the target repository.
+2. **PR present but ticket did not reach in-review**
+   - Inspect the `Pull request created` rule's enabled state, scope, condition,
+     and transition.
+   - Confirm the workflow offers in-progress → in-review.
+   - Confirm the Automation actor has Transition issues permission.
+   - Inspect the Automation audit log for the event.
+3. **Merged PR did not move the ticket to done**
+   - Inspect the `Pull request merged` rule, its status condition, and audit log.
+   - Confirm the workflow offers in-review → done.
+   - Confirm the Automation actor can perform that transition.
+4. **Inspection unavailable**
+   - Report the result as unverified, name the administrator role needed, and
+     give the relevant checklist below. Do not turn missing admin access into a
+     repository implementation blocker.
+
+Prefer an authoritative connector or API. Use an authenticated browser session
+only when the user asks for guided setup or failure diagnosis and the connector
+cannot expose the required setting. Do not install apps, connect organizations,
+edit repository access, or create rules without explicit approval.
 
 ## Setup guide
 
@@ -191,10 +196,10 @@ transition and missing Transition issues permission.
 
 After the first real pull request opens, confirm that it appears in Jira's
 Development panel, its actual base branch matches `pull_request.base_branch`,
-and the ticket reaches in-review. Block handoff if any check fails. A different
-base branch must be resolved before handoff. After the merge, confirm that the
-ticket reaches done and inspect the Jira Automation audit log if the transition
-fails.
+and the ticket reaches in-review. If it fails, follow the event-time diagnosis
+above without discarding completed implementation. After the merge, confirm
+that the ticket reaches done and inspect the Jira Automation audit log if the
+transition fails.
 
 ## Guided remediation
 
@@ -211,9 +216,10 @@ Give the shortest path for the observed failure:
 - Inspection denied: report `unverified`, name the missing role, and give the admin
   the checklist above.
 
-Do not fall back silently to manual status changes when configuration requires
-automated sync. The user may deliberately change `jira_status_sync` to `manual`
-through the normal configuration preview and approval flow.
+Do not fall back silently to manual status changes. Offer a one-time transition
+only with an exact preview and explicit approval. For repeated manual ownership,
+change `jira_status_sync` to `manual` through the normal configuration preview
+and approval flow.
 
 ## Authoritative references
 
