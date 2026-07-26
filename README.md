@@ -42,7 +42,10 @@ $jira-ticket-workflow setup this repository
 
 In Cursor, invoke `jira-ticket-workflow` from the slash-command menu and ask it to set up the repository.
 
-The skill discovers accessible Jira projects, issue types, and statuses through read-only calls; inspects repository Git conventions; verifies required Jira–GitHub status synchronization; previews `.jira-ticket-workflow.json`; asks before writing it; and finishes with a read-only readiness report.
+The skill discovers Jira and repository basics through read-only calls, previews
+`.jira-ticket-workflow.json`, asks before writing it, and finishes with a
+minimal readiness report. Operation-specific Jira fields and automated
+PR-status transitions are verified when first exercised.
 
 ## Jira connection
 
@@ -81,15 +84,15 @@ portion with `--jira-connection mcp --verified-external-check jira_mcp`. Never
 pass the external-check option before the host has collected the corresponding
 evidence.
 
-The default `jira_status_sync: automated` mode requires GitHub for Atlassian,
-target repository access, Jira-key linkage, enabled PR-created and PR-merged
-Automation rules, required workflow transitions, and Automation actor
-permissions. Missing, misconfigured, or unverified status-sync configuration
-blocks readiness.
+The default `jira_status_sync: automated` mode expects GitHub for Atlassian and
+Jira Automation to move a linked ticket after PR-created and PR-merged events.
+The helper reports app, rule, workflow, and actor checks as deferred instead of
+blocking implementation. If the observable transition fails, the skill
+diagnoses that event and guides the user through the specific setup correction.
 Use explicit `manual` mode when a person will own Jira review and done
-transitions. A missing Jira configuration, Jira permission, or Git repository
-also remains a blocker. GitHub authentication and repository access are blockers
-when `pull_request.provider` is `github`.
+transitions. A missing Jira configuration, core Jira project/search access, or
+Git repository remains a blocker. GitHub authentication and repository access
+are blockers when `pull_request.provider` is `github`.
 
 For a private team repository, one maintainer can commit a configuration that contains no credentials or sensitive account IDs; teammates then need either an authorized Jira MCP connection or their REST fallback environment variables and a passing readiness result. Keep the configuration ignored in public repositories.
 
@@ -105,15 +108,15 @@ All helper write commands preview by default. After the user approves the exact 
 classify request
   → inspect prompt versus repository reality
   → resolve consequential unknowns
-  → pass read-only setup checks
+  → pass minimal read-only access and repository checks
   → search Jira for duplicates
   → show ticket draft and obtain approval
   → create/select ticket
   → create or reuse a task-dedicated worktree and move to In Progress
   → implement and validate
   → explain the change in plain language
-  → open PR; Jira Automation moves the ticket to In Review
-  → approved merge; Jira Automation moves the ticket to Done
+  → open PR; verify In Review or diagnose that event
+  → approved merge; verify Done or diagnose that event
 ```
 
 The skill keeps discovery terminology internal. Jira contains the stable behavior contract; the pull request contains implementation detail and evidence.

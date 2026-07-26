@@ -23,7 +23,9 @@ SPEC = importlib.util.spec_from_file_location("public_jira_agent_workflow", MODU
 assert SPEC and SPEC.loader
 jira_workflow = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(jira_workflow)
-STATUS_SYNC_ATTESTATIONS = list(jira_workflow.AUTOMATED_STATUS_SYNC_CHECKS)
+STATUS_SYNC_EVENT_CHECKS = list(
+    jira_workflow.AUTOMATED_STATUS_SYNC_EVENT_CHECKS
+)
 
 
 def config(*, cc_mode: str = "none") -> dict:
@@ -577,7 +579,7 @@ class SetupCommandTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(result["config"]["version"], 2)
             self.assertIn(
-                "enabled PR-created and PR-merged automation rules",
+                "validates status synchronization after real pull-request and merge events",
                 result["jira_github_status_sync"],
             )
             self.assertIn(
@@ -674,7 +676,7 @@ class SetupCommandTest(unittest.TestCase):
 
 
 class CheckCommandTest(unittest.TestCase):
-    def test_mcp_connection_accepts_evidence_backed_host_attestations(self) -> None:
+    def test_mcp_core_access_allows_deferred_operation_and_event_checks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".jira-ticket-workflow.json"
             path.write_text(json.dumps(config()), encoding="utf-8")
@@ -682,7 +684,7 @@ class CheckCommandTest(unittest.TestCase):
                 config=str(path),
                 repo=directory,
                 jira_connection="mcp",
-                verified_external_check=["jira_mcp", *STATUS_SYNC_ATTESTATIONS],
+                verified_external_check=["jira_mcp"],
             )
             git_pass = [jira_workflow._check("git", "pass", "ok", required=True)]
             with (
@@ -696,10 +698,14 @@ class CheckCommandTest(unittest.TestCase):
 
         self.assertTrue(result["ready"])
         self.assertEqual(result["jira_connection"], "mcp")
-        self.assertEqual(result["mode"], "standard")
+        self.assertEqual(result["mode"], "ready-with-deferred-checks")
         self.assertEqual(result["external_checks_required"], [])
+        self.assertEqual(
+            result["deferred_checks"],
+            ["jira_operation_configuration", *STATUS_SYNC_EVENT_CHECKS],
+        )
 
-    def test_automated_status_sync_blocks_until_every_host_check_passes(self) -> None:
+    def test_automated_status_sync_is_deferred_instead_of_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".jira-ticket-workflow.json"
             path.write_text(json.dumps(config()), encoding="utf-8")
@@ -707,30 +713,25 @@ class CheckCommandTest(unittest.TestCase):
                 config=str(path),
                 repo=directory,
                 jira_connection="mcp",
-                verified_external_check=[
-                    "jira_mcp",
-                    "jira_github_connection",
-                    "jira_automation_rules",
-                ],
+                verified_external_check=["jira_mcp"],
             )
             with patch.object(jira_workflow, "_check_git", return_value=[]):
                 result = jira_workflow.command_check(args)
 
-        workflow_automation = next(
+        merged_event = next(
             item
             for item in result["checks"]
-            if item["id"] == "jira_workflow_automation"
+            if item["id"] == "jira_pr_merged_status_sync"
         )
-        self.assertFalse(result["ready"])
-        self.assertEqual(result["mode"], "external-verification-required")
-        self.assertEqual(workflow_automation["state"], "unverified")
-        self.assertTrue(workflow_automation["required"])
-        self.assertEqual(
-            result["external_checks_required"], ["jira_workflow_automation"]
-        )
-        self.assertIn("Transition issues", workflow_automation["remediation"])
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["mode"], "ready-with-deferred-checks")
+        self.assertEqual(merged_event["state"], "warn")
+        self.assertFalse(merged_event["required"])
+        self.assertEqual(result["external_checks_required"], [])
+        self.assertIn("jira_pr_merged_status_sync", result["deferred_checks"])
+        self.assertIn("actor permission", merged_event["remediation"])
 
-    def test_unverified_mcp_and_status_sync_are_both_reported(self) -> None:
+    def test_unverified_mcp_blocks_while_status_sync_remains_deferred(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".jira-ticket-workflow.json"
             path.write_text(json.dumps(config()), encoding="utf-8")
@@ -743,9 +744,11 @@ class CheckCommandTest(unittest.TestCase):
                 result = jira_workflow.command_check(args)
 
         self.assertFalse(result["ready"])
+        self.assertEqual(result["mode"], "external-verification-required")
+        self.assertEqual(result["external_checks_required"], ["jira_mcp"])
         self.assertEqual(
-            result["external_checks_required"],
-            ["jira_mcp", *STATUS_SYNC_ATTESTATIONS],
+            result["deferred_checks"],
+            ["jira_operation_configuration", *STATUS_SYNC_EVENT_CHECKS],
         )
 
     def test_manual_status_sync_does_not_require_integration_attestation(self) -> None:
@@ -769,6 +772,10 @@ class CheckCommandTest(unittest.TestCase):
             if item["id"] == "jira_github_status_sync"
         )
         self.assertTrue(result["ready"])
+        self.assertEqual(result["mode"], "ready-with-deferred-checks")
+        self.assertEqual(
+            result["deferred_checks"], ["jira_operation_configuration"]
+        )
         self.assertEqual(status_sync["state"], "warn")
         self.assertFalse(status_sync["required"])
 
@@ -826,7 +833,7 @@ class CheckCommandTest(unittest.TestCase):
         self.assertEqual(mismatch["state"], "block")
         self.assertFalse(result["ready"])
 
-    def test_field_cc_checks_create_screen_schema_and_accounts(self) -> None:
+    def test_operation_specific_configuration_is_deferred(self) -> None:
         class FakeClient:
             def __init__(self, _config: dict):
                 pass
@@ -837,42 +844,6 @@ class CheckCommandTest(unittest.TestCase):
             def project(self, key: str) -> dict:
                 return {"key": key}
 
-            def issue_types(self, _key: str) -> list[dict]:
-                return [{"id": "10001", "name": "Task"}]
-
-            def project_statuses(self, _key: str) -> list[dict]:
-                return [
-                    {
-                        "statuses": [
-                            {"name": name}
-                            for name in (
-                                "To Do",
-                                "In Progress",
-                                "In Review",
-                                "Done",
-                            )
-                        ]
-                    }
-                ]
-
-            def permissions(self, _key: str, permissions: list[str]) -> dict:
-                return {key: {"havePermission": True} for key in permissions}
-
-            def components(self, _key: str) -> list[dict]:
-                return [{"name": "Platform"}]
-
-            def priorities(self) -> list[dict]:
-                return [{"name": "Medium"}]
-
-            def fields(self) -> list[dict]:
-                return [{"id": "customfield_12345", "schema": {"type": "array", "items": "user"}}]
-
-            def create_fields(self, _project: str, _issue_type: str) -> list[dict]:
-                return [{"fieldId": "customfield_12345", "operations": ["set"]}]
-
-            def users(self, account_ids: list[str]) -> list[dict]:
-                return [{"accountId": item, "active": True} for item in set(account_ids)]
-
             def search(self, _jql: str, *, fields: str, limit: int) -> list[dict]:
                 return []
 
@@ -882,7 +853,7 @@ class CheckCommandTest(unittest.TestCase):
             args = SimpleNamespace(
                 config=str(path),
                 repo=directory,
-                verified_external_check=STATUS_SYNC_ATTESTATIONS,
+                verified_external_check=[],
             )
             with (
                 patch.dict(
@@ -895,13 +866,16 @@ class CheckCommandTest(unittest.TestCase):
             ):
                 result = jira_workflow.command_check(args)
         self.assertTrue(result["ready"])
-        self.assertEqual(
-            next(item for item in result["checks"] if item["id"] == "jira_cc_field")["state"],
-            "pass",
+        operation_configuration = next(
+            item
+            for item in result["checks"]
+            if item["id"] == "jira_operation_configuration"
         )
-        self.assertEqual(
-            next(item for item in result["checks"] if item["id"] == "jira_cc_accounts")["state"],
-            "pass",
+        self.assertEqual(operation_configuration["state"], "warn")
+        self.assertFalse(operation_configuration["required"])
+        self.assertIn("jira_operation_configuration", result["deferred_checks"])
+        self.assertFalse(
+            any(item["id"] == "jira_cc_field" for item in result["checks"])
         )
 
     def test_successful_check_uses_read_only_jira_methods(self) -> None:
@@ -949,7 +923,7 @@ class CheckCommandTest(unittest.TestCase):
             args = SimpleNamespace(
                 config=str(path),
                 repo=directory,
-                verified_external_check=STATUS_SYNC_ATTESTATIONS,
+                verified_external_check=[],
             )
             git_pass = [jira_workflow._check("git", "pass", "ok", required=True)]
             with (
@@ -963,6 +937,7 @@ class CheckCommandTest(unittest.TestCase):
             ):
                 result = jira_workflow.command_check(args)
         self.assertTrue(result["ready"])
+        self.assertEqual(result["mode"], "ready-with-deferred-checks")
         self.assertFalse(result["writes_performed"])
         self.assertTrue(any(item["id"] == "jira_search" for item in result["checks"]))
 
@@ -1127,18 +1102,18 @@ class DocumentationContractTest(unittest.TestCase):
             normalized_configuration,
         )
 
-    def test_automated_sync_guide_covers_deferred_runtime_and_policy_boundary(self) -> None:
+    def test_automated_sync_guide_defers_checks_until_real_events(self) -> None:
         guide = (
             MODULE_PATH.parents[1] / "references" / "github-integration.md"
         ).read_text(encoding="utf-8")
         normalized = " ".join(guide.split())
 
         self.assertIn(
-            "record the Development-panel test as deferred",
+            "Do not block implementation because the host cannot inspect",
             normalized,
         )
         self.assertIn(
-            "configured in-progress → configured in-review",
+            "The missing automatic transition does not invalidate completed code",
             normalized,
         )
         self.assertIn(
@@ -1146,7 +1121,7 @@ class DocumentationContractTest(unittest.TestCase):
             normalized,
         )
         self.assertIn(
-            "Block handoff if any check fails",
+            "Do not turn missing admin access into a repository implementation blocker",
             normalized,
         )
         self.assertIn(
