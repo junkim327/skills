@@ -23,12 +23,13 @@ SPEC = importlib.util.spec_from_file_location("public_jira_agent_workflow", MODU
 assert SPEC and SPEC.loader
 jira_workflow = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(jira_workflow)
+STATUS_SYNC_ATTESTATIONS = list(jira_workflow.AUTOMATED_STATUS_SYNC_CHECKS)
 
 
 def config(*, cc_mode: str = "none") -> dict:
     field_id = "customfield_12345" if cc_mode == "field" else None
     return {
-        "version": 1,
+        "version": 2,
         "jira": {
             "base_url": "https://example.atlassian.net",
             "project_key": "ENG",
@@ -39,6 +40,7 @@ def config(*, cc_mode: str = "none") -> dict:
             "statuses": {
                 "ready": "To Do",
                 "in_progress": "In Progress",
+                "in_review": "In Review",
                 "done": "Done",
             },
             "cc": {
@@ -70,6 +72,8 @@ def config(*, cc_mode: str = "none") -> dict:
         },
         "pull_request": {
             "provider": "github",
+            "jira_status_sync": "automated",
+            "base_branch": "main",
             "template_path": ".github/pull_request_template.md",
         },
     }
@@ -165,6 +169,24 @@ class ConfigurationTest(unittest.TestCase):
         value = config()
         value["pull_request"]["template_path"] = "../../private-file"
         with self.assertRaisesRegex(ValueError, "within the repository"):
+            jira_workflow.validate_config(value)
+
+    def test_in_review_status_is_required(self) -> None:
+        value = config()
+        del value["jira"]["statuses"]["in_review"]
+        with self.assertRaisesRegex(ValueError, "in_review"):
+            jira_workflow.validate_config(value)
+
+    def test_jira_status_sync_rejects_ambiguous_optional_mode(self) -> None:
+        value = config()
+        value["pull_request"]["jira_status_sync"] = "optional"
+        with self.assertRaisesRegex(ValueError, "automated, manual"):
+            jira_workflow.validate_config(value)
+
+    def test_pull_request_base_branch_must_be_safe(self) -> None:
+        value = config()
+        value["pull_request"]["base_branch"] = "bad..branch"
+        with self.assertRaisesRegex(ValueError, "base_branch"):
             jira_workflow.validate_config(value)
 
 
@@ -523,6 +545,10 @@ class TransitionTest(unittest.TestCase):
         )
         self.assertEqual(preview["transition_id"], "1")
 
+    def test_in_review_is_an_allowed_configured_target(self) -> None:
+        selected = jira_workflow._validated_target_status(config(), "in review")
+        self.assertEqual(selected, "In Review")
+
     def test_rejects_unavailable_transition(self) -> None:
         with self.assertRaisesRegex(ValueError, "no transition"):
             jira_workflow._transition_preview(
@@ -549,7 +575,11 @@ class SetupCommandTest(unittest.TestCase):
             result = jira_workflow.command_setup(self.args(target))
             self.assertTrue(result["dry_run"])
             self.assertFalse(target.exists())
-            self.assertEqual(result["config"]["version"], 1)
+            self.assertEqual(result["config"]["version"], 2)
+            self.assertIn(
+                "enabled PR-created and PR-merged automation rules",
+                result["jira_github_status_sync"],
+            )
 
     def test_setup_writes_approved_config_atomically_and_refuses_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -640,7 +670,7 @@ class SetupCommandTest(unittest.TestCase):
 
 
 class CheckCommandTest(unittest.TestCase):
-    def test_mcp_connection_delegates_jira_checks_without_rest_credentials(self) -> None:
+    def test_mcp_connection_accepts_evidence_backed_host_attestations(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".jira-ticket-workflow.json"
             path.write_text(json.dumps(config()), encoding="utf-8")
@@ -648,6 +678,7 @@ class CheckCommandTest(unittest.TestCase):
                 config=str(path),
                 repo=directory,
                 jira_connection="mcp",
+                verified_external_check=["jira_mcp", *STATUS_SYNC_ATTESTATIONS],
             )
             git_pass = [jira_workflow._check("git", "pass", "ok", required=True)]
             with (
@@ -661,8 +692,82 @@ class CheckCommandTest(unittest.TestCase):
 
         self.assertTrue(result["ready"])
         self.assertEqual(result["jira_connection"], "mcp")
+        self.assertEqual(result["mode"], "standard")
+        self.assertEqual(result["external_checks_required"], [])
+
+    def test_automated_status_sync_blocks_until_every_host_check_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".jira-ticket-workflow.json"
+            path.write_text(json.dumps(config()), encoding="utf-8")
+            args = SimpleNamespace(
+                config=str(path),
+                repo=directory,
+                jira_connection="mcp",
+                verified_external_check=[
+                    "jira_mcp",
+                    "jira_github_connection",
+                    "jira_automation_rules",
+                    "jira_workflow_automation",
+                ],
+            )
+            with patch.object(jira_workflow, "_check_git", return_value=[]):
+                result = jira_workflow.command_check(args)
+
+        merge_controls = next(
+            item
+            for item in result["checks"]
+            if item["id"] == "github_merge_controls"
+        )
+        self.assertFalse(result["ready"])
         self.assertEqual(result["mode"], "external-verification-required")
-        self.assertEqual(result["external_checks_required"], ["jira_mcp"])
+        self.assertEqual(merge_controls["state"], "unverified")
+        self.assertTrue(merge_controls["required"])
+        self.assertEqual(
+            result["external_checks_required"], ["github_merge_controls"]
+        )
+        self.assertIn("ruleset", merge_controls["remediation"])
+
+    def test_unverified_mcp_and_status_sync_are_both_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".jira-ticket-workflow.json"
+            path.write_text(json.dumps(config()), encoding="utf-8")
+            args = SimpleNamespace(
+                config=str(path),
+                repo=directory,
+                jira_connection="mcp",
+            )
+            with patch.object(jira_workflow, "_check_git", return_value=[]):
+                result = jira_workflow.command_check(args)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(
+            result["external_checks_required"],
+            ["jira_mcp", *STATUS_SYNC_ATTESTATIONS],
+        )
+
+    def test_manual_status_sync_does_not_require_integration_attestation(self) -> None:
+        value = config()
+        value["pull_request"]["jira_status_sync"] = "manual"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".jira-ticket-workflow.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            args = SimpleNamespace(
+                config=str(path),
+                repo=directory,
+                jira_connection="mcp",
+                verified_external_check=["jira_mcp"],
+            )
+            with patch.object(jira_workflow, "_check_git", return_value=[]):
+                result = jira_workflow.command_check(args)
+
+        status_sync = next(
+            item
+            for item in result["checks"]
+            if item["id"] == "jira_github_status_sync"
+        )
+        self.assertTrue(result["ready"])
+        self.assertEqual(status_sync["state"], "warn")
+        self.assertFalse(status_sync["required"])
 
     def test_missing_config_is_blocked_without_jira_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -733,7 +838,19 @@ class CheckCommandTest(unittest.TestCase):
                 return [{"id": "10001", "name": "Task"}]
 
             def project_statuses(self, _key: str) -> list[dict]:
-                return [{"statuses": [{"name": name} for name in ("To Do", "In Progress", "Done")]}]
+                return [
+                    {
+                        "statuses": [
+                            {"name": name}
+                            for name in (
+                                "To Do",
+                                "In Progress",
+                                "In Review",
+                                "Done",
+                            )
+                        ]
+                    }
+                ]
 
             def permissions(self, _key: str, permissions: list[str]) -> dict:
                 return {key: {"havePermission": True} for key in permissions}
@@ -759,7 +876,11 @@ class CheckCommandTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".jira-ticket-workflow.json"
             path.write_text(json.dumps(config(cc_mode="field")), encoding="utf-8")
-            args = SimpleNamespace(config=str(path), repo=directory)
+            args = SimpleNamespace(
+                config=str(path),
+                repo=directory,
+                verified_external_check=STATUS_SYNC_ATTESTATIONS,
+            )
             with (
                 patch.dict(
                     os.environ,
@@ -800,6 +921,7 @@ class CheckCommandTest(unittest.TestCase):
                         "statuses": [
                             {"name": "To Do"},
                             {"name": "In Progress"},
+                            {"name": "In Review"},
                             {"name": "Done"},
                         ]
                     }
@@ -821,7 +943,11 @@ class CheckCommandTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".jira-ticket-workflow.json"
             path.write_text(json.dumps(config()), encoding="utf-8")
-            args = SimpleNamespace(config=str(path), repo=directory)
+            args = SimpleNamespace(
+                config=str(path),
+                repo=directory,
+                verified_external_check=STATUS_SYNC_ATTESTATIONS,
+            )
             git_pass = [jira_workflow._check("git", "pass", "ok", required=True)]
             with (
                 patch.dict(
@@ -862,6 +988,13 @@ class CheckGitTest(unittest.TestCase):
                     "--json",
                     "nameWithOwner,viewerPermission",
                 ): (0, '{"nameWithOwner":"owner/repo","viewerPermission":"WRITE"}'),
+                (
+                    "gh",
+                    "api",
+                    "--method",
+                    "GET",
+                    "repos/owner/repo/branches/main",
+                ): (0, '{"name":"main"}'),
             }
             return responses[tuple(command)]
 
@@ -874,6 +1007,44 @@ class CheckGitTest(unittest.TestCase):
         self.assertFalse(any(item["state"] == "block" for item in checks))
         forbidden = {"push", "commit", "checkout", "switch", "reset", "pr"}
         self.assertFalse(any(forbidden.intersection(command[1:]) for command in commands))
+
+    def test_missing_configured_base_branch_blocks(self) -> None:
+        def fake_run(command: list[str], *, cwd: Path, timeout: int = 15) -> tuple[int, str]:
+            del cwd, timeout
+            responses = {
+                ("git", "rev-parse", "--show-toplevel"): (0, "/tmp/repo"),
+                ("git", "remote", "get-url", "origin"): (0, "git@github.com:owner/repo.git"),
+                ("git", "status", "--porcelain"): (0, ""),
+                ("git", "config", "user.name"): (0, "Example User"),
+                ("git", "config", "user.email"): (0, "user@example.com"),
+                ("gh", "auth", "status", "--hostname", "github.com"): (0, ""),
+                (
+                    "gh",
+                    "repo",
+                    "view",
+                    "--json",
+                    "nameWithOwner,viewerPermission",
+                ): (0, '{"nameWithOwner":"owner/repo","viewerPermission":"WRITE"}'),
+                (
+                    "gh",
+                    "api",
+                    "--method",
+                    "GET",
+                    "repos/owner/repo/branches/main",
+                ): (1, ""),
+            }
+            return responses[tuple(command)]
+
+        with (
+            patch.object(jira_workflow.shutil, "which", return_value="/usr/bin/tool"),
+            patch.object(jira_workflow, "_run_command", side_effect=fake_run),
+        ):
+            checks = jira_workflow._check_git(config(), repo=Path("/tmp/repo"))
+
+        base_branch = next(
+            item for item in checks if item["id"] == "github_base_branch"
+        )
+        self.assertEqual(base_branch["state"], "block")
 
     def test_unverifiable_github_permission_blocks(self) -> None:
         def fake_run(command: list[str], *, cwd: Path, timeout: int = 15) -> tuple[int, str]:
@@ -901,6 +1072,7 @@ class CheckGitTest(unittest.TestCase):
     def test_manual_pr_provider_does_not_require_gh(self) -> None:
         value = config()
         value["pull_request"]["provider"] = "manual"
+        value["pull_request"]["jira_status_sync"] = "manual"
 
         def fake_run(command: list[str], *, cwd: Path, timeout: int = 15) -> tuple[int, str]:
             del cwd, timeout
@@ -922,6 +1094,35 @@ class CheckGitTest(unittest.TestCase):
         self.assertFalse(any(item["id"].startswith("github_") for item in checks))
         provider = next(item for item in checks if item["id"] == "pull_request_provider")
         self.assertEqual(provider["state"], "warn")
+
+
+class DocumentationContractTest(unittest.TestCase):
+    def test_automated_sync_guide_covers_deferred_runtime_and_merge_controls(self) -> None:
+        guide = (
+            MODULE_PATH.parents[1] / "references" / "github-integration.md"
+        ).read_text(encoding="utf-8")
+        normalized = " ".join(guide.split())
+
+        self.assertIn(
+            "record the Development-panel test as deferred",
+            normalized,
+        )
+        self.assertIn(
+            "configured in-progress → configured in-review",
+            normalized,
+        )
+        self.assertIn(
+            "auto-merge is disabled and GitHub Apps cannot merge",
+            normalized,
+        )
+        self.assertIn(
+            "Block handoff if any check fails",
+            normalized,
+        )
+        self.assertIn(
+            "actual base branch matches `pull_request.base_branch`",
+            normalized,
+        )
 
 
 if __name__ == "__main__":

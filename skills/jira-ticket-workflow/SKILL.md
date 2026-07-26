@@ -12,6 +12,8 @@ Resolve `<skill-dir>` to the directory containing this `SKILL.md`; never assume 
 Read these resources when needed:
 
 - Before the first Jira write or when setup is unclear, read `references/configuration.md`.
+- Before setup or readiness verification when `pull_request.jira_status_sync` is
+  `automated`, read `references/github-integration.md`.
 - Before drafting a Jira ticket or pull request, read `references/content-format.md`.
 
 ## Jira connection strategy
@@ -31,9 +33,14 @@ Prefer a Jira MCP connector exposed by the current host. Use the bundled Python 
 - Resolve every decision that could materially change architecture, scope, security, permissions, side effects, ownership, or acceptance criteria.
 - Search open and resolved Jira work before creating a ticket.
 - Pass the read-only readiness checks before Jira writes or repository edits. The only setup exception is writing the explicitly approved local workflow configuration required by `check`.
-- Preview the exact operation and obtain explicit approval before every Jira write.
+- Preview the exact operation and obtain explicit approval before every
+  agent-initiated Jira write. Jira Automation rules approved during setup may
+  perform their configured PR-driven transitions without per-event approval.
 - Create or select a Jira ticket before implementation.
 - Move the ticket to the configured in-progress status after creating the local branch or worktree and before the first edit.
+- When Jira status sync is automated, verify the GitHub for Atlassian connection,
+  repository access, Jira-key linkage, enabled automation rules, workflow
+  transitions, Automation actor, and GitHub merge controls before implementation.
 - Keep credentials, personal data, sensitive production data, raw logs, and temporary investigation files out of Jira, commits, and pull requests.
 - Never approve or merge the pull request for the user.
 
@@ -86,7 +93,16 @@ When the user asks to set up the workflow, or configuration is missing:
      python3 "<skill-dir>/scripts/jira_workflow.py" --config .jira-ticket-workflow.json check --repo . --jira-connection rest
      ```
 
-Treat missing Jira configuration, project access, issue type, status, or Git as blockers. REST fallback also requires Jira credentials. When `pull_request.provider` is `github`, require GitHub authentication and repository access. Treat an unverified native Jira-GitHub integration as a warning: the workflow still links the pull request through a Jira progress comment. `check` must never create or change Jira work, branches, commits, pushes, or pull requests.
+When `pull_request.jira_status_sync` is `automated`, complete the read-only
+preflight in `references/github-integration.md`. Treat `missing`,
+`misconfigured`, and `unverified` results as blockers. Only after the host has
+collected evidence for every required item may it rerun `check` with
+the four automated-sync `--verified-external-check` values listed in
+`references/github-integration.md`. For MCP, also pass
+`--verified-external-check jira_mcp` only after its Jira checks pass. These
+flags are one-run attestations, not substitutes for inspection.
+
+Treat missing Jira configuration, project access, issue type, status, or Git as blockers. REST fallback also requires Jira credentials. When `pull_request.provider` is `github`, require GitHub authentication and repository access. `check` must never create or change Jira work, automation rules, branches, commits, pushes, or pull requests.
 
 ## 1. Classify the request
 
@@ -243,6 +259,28 @@ After implementation and validation, but before opening the pull request:
 3. Explain the reasoning plainly after the answer. Resolve any surfaced mismatch before opening the pull request.
 4. Treat this as a handoff aid, not a score or gate. If the user skips or does not answer, continue with the pull request.
 
-Preview the Jira progress comment with the team-readable summary, validation result, material plan deviations, residual risk, and pull-request link. Obtain explicit approval, then write it through MCP or REST fallback. Keep Jira in the configured in-progress status while the pull request is open.
+Preview the Jira progress comment with the team-readable summary, validation result, material plan deviations, residual risk, and pull-request link. Obtain explicit approval, then write it through MCP or REST fallback.
 
-After a human merge, let Jira automation move the ticket to the configured done status when available. If automation is absent, report the required transition; do not silently force it.
+Open the pull request against `pull_request.base_branch`. Inspect the created
+pull request and confirm its actual base branch matches the configuration. If it
+does not, stop handoff until the new target branch's existence and merge controls
+pass readiness.
+
+For `automated` status sync, Jira Automation owns the review lifecycle:
+
+- `Pull request created` moves the linked ticket from the configured in-progress
+  status to the configured in-review status.
+- `Pull request merged` moves the linked ticket from in-review to done.
+- An optional `Pull request declined` rule may return the ticket to in-progress.
+
+After opening the pull request, verify that it appears in Jira's Development
+panel and Jira reached in-review. If either check fails, inspect the rule audit
+log and report the failure; do not silently force the transition. Never approve
+or merge the pull request for the user. GitHub branch protection and merge
+permissions, not the Jira merged event, must enforce human approval. If policy
+requires a person to perform the merge action, also verify that auto-merge is
+disabled and GitHub Apps cannot merge or bypass the rule.
+
+For `manual` status sync, preview and approve the in-review transition after the
+pull request opens, and report the done transition required after the approved
+merge.

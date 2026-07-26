@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "jira": {
     "base_url": "https://your-domain.atlassian.net",
     "project_key": "ENG",
@@ -12,6 +12,7 @@
     "statuses": {
       "ready": "To Do",
       "in_progress": "In Progress",
+      "in_review": "In Review",
       "done": "Done"
     },
     "cc": {
@@ -41,6 +42,8 @@
   },
   "pull_request": {
     "provider": "github",
+    "jira_status_sync": "automated",
+    "base_branch": "main",
     "template_path": ".github/pull_request_template.md"
   }
 }
