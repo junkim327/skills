@@ -25,10 +25,8 @@ To Do → In Progress → In Review → Done
 - Jira Automation moves a linked ticket to in-review when a pull request is
   created.
 - Jira Automation moves the ticket to done when the pull request is merged.
-- An active GitHub ruleset or branch protection rule requires a pull request and
-  at least one approving human review on the target branch. Review bypass is
-  limited to explicitly approved actors. Jira's merged trigger only proves that
-  the pull request was merged.
+- The integration observes pull-request events. Repository review and merge
+  policies are owned separately and are not status-sync readiness requirements.
 
 ## Preflight result states
 
@@ -93,15 +91,6 @@ Verify all of the following:
      configured project.
    - Confirm users who need to inspect linked pull requests have View Development
      Tools permission.
-6. **GitHub merge controls**
-   - Inspect the active ruleset or branch protection rule for the pull request's
-     target branch.
-   - Require changes through pull requests and at least one approving human review.
-   - Inspect bypass actors and confirm bots or broad roles cannot bypass review
-     unless the user explicitly accepts that exception.
-   - If the policy literally requires a person to perform the merge, confirm
-     auto-merge is disabled and GitHub Apps cannot merge or bypass the rule.
-
 After every required structural item passes and any first-event test is
 explicitly recorded as deferred, rerun the helper with:
 
@@ -111,8 +100,7 @@ python3 "<skill-dir>/scripts/jira_workflow.py" \
   check --repo . --jira-connection <mcp-or-rest> \
   --verified-external-check jira_github_connection \
   --verified-external-check jira_automation_rules \
-  --verified-external-check jira_workflow_automation \
-  --verified-external-check github_merge_controls
+  --verified-external-check jira_workflow_automation
 ```
 
 When Jira was verified through MCP, also add:
@@ -201,23 +189,12 @@ Enable each rule, confirm its actor, and inspect the audit log after the first
 real event. If an automatic transition fails, first check for a missing workflow
 transition and missing Transition issues permission.
 
-### Protect the target branch
-
-In the repository or organization rulesets, target the branch that receives the
-pull request:
-
-1. Enable **Require a pull request before merging**.
-2. Require at least one approving review.
-3. Prefer dismissing stale approvals or requiring approval of the latest push.
-4. Review bypass permissions and remove unintended GitHub Apps, roles, or teams.
-5. Disable auto-merge when a person must perform the merge action.
-
 After the first real pull request opens, confirm that it appears in Jira's
 Development panel, its actual base branch matches `pull_request.base_branch`,
 and the ticket reaches in-review. Block handoff if any check fails. A different
-base branch requires a fresh merge-control inspection before handoff. After the
-approved merge, confirm that the ticket reaches done and inspect the Jira
-Automation audit log if the transition fails.
+base branch must be resolved before handoff. After the merge, confirm that the
+ticket reaches done and inspect the Jira Automation audit log if the transition
+fails.
 
 ## Guided remediation
 
@@ -231,8 +208,6 @@ Give the shortest path for the observed failure:
   condition, and transition action.
 - Transition missing: guide a Jira admin to add the workflow path.
 - Actor denied: identify the configured actor and request Transition issues permission.
-- Merge controls missing: guide a repository administrator to require a pull
-  request and approving review, then review bypass actors.
 - Inspection denied: report `unverified`, name the missing role, and give the admin
   the checklist above.
 
@@ -246,5 +221,3 @@ through the normal configuration preview and approval flow.
 - [Link GitHub development information to Jira work items](https://support.atlassian.com/jira-cloud-administration/docs/use-the-github-for-jira-app/)
 - [Jira Automation DevOps triggers](https://support.atlassian.com/cloud-automation/docs/jira-automation-triggers/)
 - [Automation REST API](https://developer.atlassian.com/cloud/automation/rest/intro/)
-- [Available GitHub ruleset rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)
-- [About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)

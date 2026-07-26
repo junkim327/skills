@@ -40,7 +40,7 @@ Prefer a Jira MCP connector exposed by the current host. Use the bundled Python 
 - Move the ticket to the configured in-progress status after creating the local branch or worktree and before the first edit.
 - When Jira status sync is automated, verify the GitHub for Atlassian connection,
   repository access, Jira-key linkage, enabled automation rules, workflow
-  transitions, Automation actor, and GitHub merge controls before implementation.
+  transitions, and Automation actor before implementation.
 - Keep credentials, personal data, sensitive production data, raw logs, and temporary investigation files out of Jira, commits, and pull requests.
 - Never approve or merge the pull request for the user.
 
@@ -97,7 +97,7 @@ When `pull_request.jira_status_sync` is `automated`, complete the read-only
 preflight in `references/github-integration.md`. Treat `missing`,
 `misconfigured`, and `unverified` results as blockers. Only after the host has
 collected evidence for every required item may it rerun `check` with
-the four automated-sync `--verified-external-check` values listed in
+the three automated-sync `--verified-external-check` values listed in
 `references/github-integration.md`. For MCP, also pass
 `--verified-external-check jira_mcp` only after its Jira checks pass. These
 flags are one-run attestations, not substitutes for inspection.
@@ -263,8 +263,8 @@ Preview the Jira progress comment with the team-readable summary, validation res
 
 Open the pull request against `pull_request.base_branch`. Inspect the created
 pull request and confirm its actual base branch matches the configuration. If it
-does not, stop handoff until the new target branch's existence and merge controls
-pass readiness.
+does not, stop handoff until the mismatch is resolved and the configured target
+branch passes readiness.
 
 For `automated` status sync, Jira Automation owns the review lifecycle:
 
@@ -276,10 +276,8 @@ For `automated` status sync, Jira Automation owns the review lifecycle:
 After opening the pull request, verify that it appears in Jira's Development
 panel and Jira reached in-review. If either check fails, inspect the rule audit
 log and report the failure; do not silently force the transition. Never approve
-or merge the pull request for the user. GitHub branch protection and merge
-permissions, not the Jira merged event, must enforce human approval. If policy
-requires a person to perform the merge action, also verify that auto-merge is
-disabled and GitHub Apps cannot merge or bypass the rule.
+or merge the pull request for the user. Treat repository review and merge
+policies as repository-owned concerns outside Jira status-sync readiness.
 
 For `manual` status sync, preview and approve the in-review transition after the
 pull request opens, and report the done transition required after the approved

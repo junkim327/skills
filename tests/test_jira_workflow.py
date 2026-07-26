@@ -707,25 +707,24 @@ class CheckCommandTest(unittest.TestCase):
                     "jira_mcp",
                     "jira_github_connection",
                     "jira_automation_rules",
-                    "jira_workflow_automation",
                 ],
             )
             with patch.object(jira_workflow, "_check_git", return_value=[]):
                 result = jira_workflow.command_check(args)
 
-        merge_controls = next(
+        workflow_automation = next(
             item
             for item in result["checks"]
-            if item["id"] == "github_merge_controls"
+            if item["id"] == "jira_workflow_automation"
         )
         self.assertFalse(result["ready"])
         self.assertEqual(result["mode"], "external-verification-required")
-        self.assertEqual(merge_controls["state"], "unverified")
-        self.assertTrue(merge_controls["required"])
+        self.assertEqual(workflow_automation["state"], "unverified")
+        self.assertTrue(workflow_automation["required"])
         self.assertEqual(
-            result["external_checks_required"], ["github_merge_controls"]
+            result["external_checks_required"], ["jira_workflow_automation"]
         )
-        self.assertIn("ruleset", merge_controls["remediation"])
+        self.assertIn("Transition issues", workflow_automation["remediation"])
 
     def test_unverified_mcp_and_status_sync_are_both_reported(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1097,7 +1096,7 @@ class CheckGitTest(unittest.TestCase):
 
 
 class DocumentationContractTest(unittest.TestCase):
-    def test_automated_sync_guide_covers_deferred_runtime_and_merge_controls(self) -> None:
+    def test_automated_sync_guide_covers_deferred_runtime_and_policy_boundary(self) -> None:
         guide = (
             MODULE_PATH.parents[1] / "references" / "github-integration.md"
         ).read_text(encoding="utf-8")
@@ -1112,7 +1111,7 @@ class DocumentationContractTest(unittest.TestCase):
             normalized,
         )
         self.assertIn(
-            "auto-merge is disabled and GitHub Apps cannot merge",
+            "Repository review and merge policies are owned separately",
             normalized,
         )
         self.assertIn(

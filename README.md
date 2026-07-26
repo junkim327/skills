@@ -83,9 +83,9 @@ evidence.
 
 The default `jira_status_sync: automated` mode requires GitHub for Atlassian,
 target repository access, Jira-key linkage, enabled PR-created and PR-merged
-Automation rules, required workflow transitions, Automation actor permissions,
-and protected human-approved merge on the configured base branch. Missing,
-misconfigured, or unverified status-sync configuration blocks readiness.
+Automation rules, required workflow transitions, and Automation actor
+permissions. Missing, misconfigured, or unverified status-sync configuration
+blocks readiness.
 Use explicit `manual` mode when a person will own Jira review and done
 transitions. A missing Jira configuration, Jira permission, or Git repository
 also remains a blocker. GitHub authentication and repository access are blockers
