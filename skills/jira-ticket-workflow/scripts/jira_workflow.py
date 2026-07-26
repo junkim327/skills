@@ -29,8 +29,16 @@ VALID_CHANGE_TYPES = {"fix", "new"}
 VALID_DISCOVERY_DEPTHS = {"light", "full"}
 VALID_CC_MODES = {"none", "field", "comment"}
 VALID_PR_PROVIDERS = {"github", "manual"}
+VALID_JIRA_STATUS_SYNC_MODES = {"automated", "manual"}
 VALID_JIRA_CONNECTIONS = {"mcp", "rest"}
-CONFIG_VERSION = 1
+AUTOMATED_STATUS_SYNC_CHECKS = (
+    "jira_github_connection",
+    "jira_automation_rules",
+    "jira_workflow_automation",
+    "github_merge_controls",
+)
+VALID_EXTERNAL_CHECKS = {"jira_mcp", *AUTOMATED_STATUS_SYNC_CHECKS}
+CONFIG_VERSION = 2
 DEFAULT_CONFIG_NAME = ".jira-ticket-workflow.json"
 ISSUE_KEY_PATTERN = re.compile(r"^([A-Za-z][A-Za-z0-9_]*)-([1-9][0-9]*)$")
 REQUIRED_TICKET_FIELDS = (
@@ -266,6 +274,22 @@ def _is_safe_relative_path(value: str) -> bool:
     )
 
 
+def _is_safe_branch_name(value: str) -> bool:
+    rendered = str(value or "").strip()
+    forbidden = set(" ~^:?*[\\")
+    return (
+        bool(rendered)
+        and len(rendered) <= 255
+        and rendered == value
+        and not rendered.startswith(("-", ".", "/"))
+        and not rendered.endswith((".", "/", ".lock"))
+        and ".." not in rendered
+        and "@{" not in rendered
+        and "//" not in rendered
+        and not any(character in forbidden or ord(character) < 32 for character in rendered)
+    )
+
+
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     errors: list[str] = []
     jira = config.get("jira")
@@ -354,10 +378,12 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     else:
         errors.extend(
             _unknown_key_errors(
-                "jira.statuses", statuses, {"ready", "in_progress", "done"}
+                "jira.statuses",
+                statuses,
+                {"ready", "in_progress", "in_review", "done"},
             )
         )
-        for key in ("ready", "in_progress", "done"):
+        for key in ("ready", "in_progress", "in_review", "done"):
             if not isinstance(statuses.get(key), str) or not statuses[key].strip():
                 errors.append(f"jira.statuses.{key} must be a non-empty string")
 
@@ -459,12 +485,29 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     else:
         errors.extend(
             _unknown_key_errors(
-                "pull_request", pull_request, {"provider", "template_path"}
+                "pull_request",
+                pull_request,
+                {
+                    "provider",
+                    "jira_status_sync",
+                    "base_branch",
+                    "template_path",
+                },
             )
         )
     provider = pull_request.get("provider", "github")
     if provider not in VALID_PR_PROVIDERS:
         errors.append("pull_request.provider must be one of: github, manual")
+    jira_status_sync = pull_request.get("jira_status_sync", "automated")
+    if jira_status_sync not in VALID_JIRA_STATUS_SYNC_MODES:
+        errors.append(
+            "pull_request.jira_status_sync must be one of: automated, manual"
+        )
+    base_branch = pull_request.get("base_branch")
+    if not isinstance(base_branch, str) or not _is_safe_branch_name(base_branch):
+        errors.append(
+            "pull_request.base_branch must be a safe non-empty Git branch name"
+        )
     template_path = pull_request.get("template_path")
     if template_path is not None and not isinstance(template_path, str):
         errors.append("pull_request.template_path must be a string or null")
@@ -1255,10 +1298,16 @@ def command_setup(args: argparse.Namespace) -> dict[str, Any]:
             "Jira Cloud base URL",
             "project key",
             "issue type",
-            "ready, in-progress, and done statuses",
+            "ready, in-progress, in-review, and done statuses",
             "Git branch and pull-request conventions",
+            "Pull-request base branch",
+            "Jira-GitHub status sync mode",
         ],
-        "native_jira_github_integration": "optional; Jira PR-link comments remain the fallback",
+        "jira_github_status_sync": (
+            "automated mode requires GitHub for Atlassian, repository access, "
+            "enabled PR-created and PR-merged automation rules, valid workflow "
+            "transitions, Automation actor permissions, and protected human-approved merge"
+        ),
     }
     if not args.write:
         return result
@@ -1354,7 +1403,9 @@ def _check_git(
 
     pull_request = (config or {}).get("pull_request") or {}
     provider = pull_request.get("provider", "github")
-    if provider == "github":
+    status_sync = pull_request.get("jira_status_sync", "automated")
+    github_required = provider == "github" or status_sync == "automated"
+    if github_required:
         if not host:
             pass
         elif host not in {"github.com", "www.github.com"}:
@@ -1362,9 +1413,12 @@ def _check_git(
                 _check(
                     "github_remote",
                     "block",
-                    "The configured PR provider is GitHub but origin is not github.com",
+                    "GitHub is required but origin is not github.com",
                     required=True,
-                    remediation="Use a GitHub origin or set pull_request.provider to manual.",
+                    remediation=(
+                        "Use a GitHub origin, or set both pull_request.provider and "
+                        "pull_request.jira_status_sync to manual."
+                    ),
                 )
             )
         elif not shutil.which("gh"):
@@ -1374,7 +1428,10 @@ def _check_git(
                     "block",
                     "GitHub CLI is not installed",
                     required=True,
-                    remediation="Install gh and run gh auth login, or use manual PR handoff.",
+                    remediation=(
+                        "Install gh and run gh auth login, or explicitly configure "
+                        "manual PR handoff and manual Jira status sync."
+                    ),
                 )
             )
         else:
@@ -1411,7 +1468,12 @@ def _check_git(
                     except json.JSONDecodeError:
                         repository = {}
                     permission = str(repository.get("viewerPermission") or "").upper()
-                    if permission not in {"WRITE", "MAINTAIN", "ADMIN"}:
+                    permission_ok = (
+                        permission in {"WRITE", "MAINTAIN", "ADMIN"}
+                        if provider == "github"
+                        else bool(permission)
+                    )
+                    if not permission_ok:
                         message = (
                             "GitHub CLI returned no verifiable repository permission"
                             if not permission
@@ -1433,6 +1495,49 @@ def _check_git(
                                 "pass",
                                 "GitHub repository is accessible",
                                 required=True,
+                            )
+                        )
+                        base_branch = str(
+                            pull_request.get("base_branch") or ""
+                        )
+                        repository_name = str(
+                            repository.get("nameWithOwner") or ""
+                        )
+                        branch_path = urllib.parse.quote(
+                            base_branch, safe=""
+                        )
+                        code, _ = _run_command(
+                            [
+                                "gh",
+                                "api",
+                                "--method",
+                                "GET",
+                                f"repos/{repository_name}/branches/{branch_path}",
+                            ],
+                            cwd=repo_root,
+                        )
+                        checks.append(
+                            _check(
+                                "github_base_branch",
+                                "pass" if code == 0 else "block",
+                                (
+                                    f"Configured pull-request base branch exists: "
+                                    f"{base_branch}"
+                                    if code == 0
+                                    else (
+                                        "Configured pull-request base branch was "
+                                        f"not found: {base_branch}"
+                                    )
+                                ),
+                                required=True,
+                                remediation=(
+                                    None
+                                    if code == 0
+                                    else (
+                                        "Choose an existing target branch and "
+                                        "re-approve the configuration."
+                                    )
+                                ),
                             )
                         )
     else:
@@ -1468,6 +1573,15 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
     jira_connection = str(getattr(args, "jira_connection", "rest"))
     if jira_connection not in VALID_JIRA_CONNECTIONS:
         _fail("jira_connection must be one of: mcp, rest")
+    verified_external_checks = set(
+        getattr(args, "verified_external_check", None) or []
+    )
+    invalid_external_checks = verified_external_checks - VALID_EXTERNAL_CHECKS
+    if invalid_external_checks:
+        _fail(
+            "verified_external_check must be one of: "
+            + ", ".join(sorted(VALID_EXTERNAL_CHECKS))
+        )
     external_checks_required: list[str] = []
 
     checks.append(
@@ -1519,16 +1633,30 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
             )
 
     if config and jira_connection == "mcp":
-        checks.append(
-            _check(
-                "jira_mcp",
-                "warn",
-                "Jira connectivity is delegated to the host MCP and was not verified by this helper",
-                required=False,
-                remediation="Verify Jira identity, project access, search, issue types, statuses, and write permissions with the host MCP before any Jira write.",
+        if "jira_mcp" in verified_external_checks:
+            checks.append(
+                _check(
+                    "jira_mcp",
+                    "pass",
+                    "The host reports that required Jira MCP checks passed",
+                    required=True,
+                )
             )
-        )
-        external_checks_required.append("jira_mcp")
+        else:
+            checks.append(
+                _check(
+                    "jira_mcp",
+                    "unverified",
+                    "Jira connectivity is delegated to the host MCP and remains unverified",
+                    required=True,
+                    remediation=(
+                        "Verify Jira identity, project access, search, issue types, "
+                        "statuses, and write permissions with the host MCP, then rerun "
+                        "check with --verified-external-check jira_mcp."
+                    ),
+                )
+            )
+            external_checks_required.append("jira_mcp")
 
     if config and jira_connection == "rest":
         configured_url = str(config["jira"].get("base_url") or "").rstrip("/")
@@ -1785,7 +1913,11 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
                     _check(
                         "jira_transition_paths",
                         "warn",
-                        "Status names exist; exact transition paths are verified against each real issue",
+                        (
+                            "Status names exist; exact transition paths are verified "
+                            "externally for automated sync and against each real issue "
+                            "for manual transitions"
+                        ),
                         required=False,
                     )
                 )
@@ -1802,18 +1934,69 @@ def command_check(args: argparse.Namespace) -> dict[str, Any]:
                 )
 
     checks.extend(_check_git(config, repo=Path(args.repo).expanduser().resolve()))
-    checks.append(
-        _check(
-            "native_jira_github",
-            "warn",
-            "Native Jira-GitHub integration is not required or automatically verified; PR links will be added to Jira comments",
-            required=False,
+    status_sync = (
+        ((config or {}).get("pull_request") or {}).get(
+            "jira_status_sync", "automated"
         )
     )
-    ready = not any(check["state"] == "block" for check in checks)
-    mode = "blocked"
-    if ready:
-        mode = "external-verification-required" if external_checks_required else "standard"
+    if config and status_sync == "automated":
+        external_check_details = {
+            "jira_github_connection": (
+                "GitHub for Atlassian, organization, and repository access",
+                "Verify the app connection and repository access in references/github-integration.md.",
+            ),
+            "jira_automation_rules": (
+                "enabled PR-created and PR-merged Jira Automation rules",
+                "Verify each rule's trigger, scope, conditions, action, and enabled state.",
+            ),
+            "jira_workflow_automation": (
+                "required workflow paths and Automation actor permissions",
+                "Verify every configured transition path and the actor's Transition issues permission.",
+            ),
+            "github_merge_controls": (
+                "protected human-approved merge controls on the configured base branch",
+                "Verify the active ruleset or branch protection, approvals, bypass actors, and auto-merge policy.",
+            ),
+        }
+        for check_id in AUTOMATED_STATUS_SYNC_CHECKS:
+            label, remediation = external_check_details[check_id]
+            if check_id in verified_external_checks:
+                checks.append(
+                    _check(
+                        check_id,
+                        "pass",
+                        f"The host reports that {label} passed",
+                        required=True,
+                    )
+                )
+            else:
+                checks.append(
+                    _check(
+                        check_id,
+                        "unverified",
+                        f"Automated status sync requires host verification of {label}",
+                        required=True,
+                        remediation=remediation,
+                    )
+                )
+                external_checks_required.append(check_id)
+    elif config:
+        checks.append(
+            _check(
+                "jira_github_status_sync",
+                "warn",
+                "Jira status sync is manual; PR activity will not transition tickets automatically",
+                required=False,
+            )
+        )
+    blocked = any(check["state"] == "block" for check in checks)
+    ready = not blocked and not external_checks_required
+    if blocked:
+        mode = "blocked"
+    elif external_checks_required:
+        mode = "external-verification-required"
+    else:
+        mode = "standard"
     return {
         "ready": ready,
         "mode": mode,
@@ -1854,6 +2037,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(VALID_JIRA_CONNECTIONS),
         default="rest",
         help="verify Jira through REST or delegate Jira verification to the host MCP",
+    )
+    check.add_argument(
+        "--verified-external-check",
+        action="append",
+        choices=sorted(VALID_EXTERNAL_CHECKS),
+        default=[],
+        help=(
+            "record a required check already verified by the host; repeat for "
+            "multiple checks and never use without evidence"
+        ),
     )
     check.set_defaults(handler=command_check)
 

@@ -20,6 +20,7 @@ class PackageLayoutTest(unittest.TestCase):
             SKILL_ROOT / "agents" / "openai.yaml",
             SKILL_ROOT / "references" / "configuration.md",
             SKILL_ROOT / "references" / "content-format.md",
+            SKILL_ROOT / "references" / "github-integration.md",
             SKILL_ROOT / "scripts" / "jira_workflow.py",
         )
 

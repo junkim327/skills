@@ -42,7 +42,7 @@ $jira-ticket-workflow setup this repository
 
 In Cursor, invoke `jira-ticket-workflow` from the slash-command menu and ask it to set up the repository.
 
-The skill discovers accessible Jira projects, issue types, and statuses through read-only calls; inspects repository Git conventions; previews `.jira-ticket-workflow.json`; asks before writing it; and finishes with a read-only readiness report.
+The skill discovers accessible Jira projects, issue types, and statuses through read-only calls; inspects repository Git conventions; verifies required Jira–GitHub status synchronization; previews `.jira-ticket-workflow.json`; asks before writing it; and finishes with a read-only readiness report.
 
 ## Jira connection
 
@@ -76,9 +76,20 @@ python3 "<skill-dir>/scripts/jira_workflow.py" \
   --config .jira-ticket-workflow.json check --repo . --jira-connection rest
 ```
 
-When Jira was verified through MCP, run the local configuration and Git/GitHub portion with `--jira-connection mcp`. The helper reports that MCP verification remains an external prerequisite.
+When Jira was verified through MCP, run the local configuration and Git/GitHub
+portion with `--jira-connection mcp --verified-external-check jira_mcp`. Never
+pass the external-check option before the host has collected the corresponding
+evidence.
 
-Native Jira-GitHub integration is optional. When it is absent or unverified, the workflow keeps the pull-request URL in a Jira progress comment. A missing Jira configuration, Jira permission, or Git repository remains a blocker. GitHub authentication and repository access are blockers only when `pull_request.provider` is `github`.
+The default `jira_status_sync: automated` mode requires GitHub for Atlassian,
+target repository access, Jira-key linkage, enabled PR-created and PR-merged
+Automation rules, required workflow transitions, Automation actor permissions,
+and protected human-approved merge on the configured base branch. Missing,
+misconfigured, or unverified status-sync configuration blocks readiness.
+Use explicit `manual` mode when a person will own Jira review and done
+transitions. A missing Jira configuration, Jira permission, or Git repository
+also remains a blocker. GitHub authentication and repository access are blockers
+when `pull_request.provider` is `github`.
 
 For a private team repository, one maintainer can commit a configuration that contains no credentials or sensitive account IDs; teammates then need either an authorized Jira MCP connection or their REST fallback environment variables and a passing readiness result. Keep the configuration ignored in public repositories.
 
@@ -101,7 +112,8 @@ classify request
   → start local work and move to In Progress
   → implement and validate
   → explain the change in plain language
-  → open PR for human review and merge
+  → open PR; Jira Automation moves the ticket to In Review
+  → approved merge; Jira Automation moves the ticket to Done
 ```
 
 The skill keeps discovery terminology internal. Jira contains the stable behavior contract; the pull request contains implementation detail and evidence.
@@ -114,6 +126,8 @@ skills/jira-ticket-workflow/
 ├── config.example.json
 ├── agents/openai.yaml
 ├── references/
+│   ├── github-integration.md
+│   └── ...
 └── scripts/jira_workflow.py
 ```
 
